@@ -1,0 +1,96 @@
+{
+  "audio_input": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "recording_duration": 5,
+    "microphone_timeout": 30,
+    "phrase_timeout": 5
+  },
+  "audio_optimization": {
+    "parallel_recognition": true,
+    "pregenerated_cache": true,
+    "dynamic_quality": true,
+    "cache_phrases": [
+      "はい、何でしょうか？",
+      "承知いたしました",
+      "照明をつけました",
+      "照明を消しました",
+      "温度を設定しました",
+      "申し訳ありません",
+      "エラーが発生しました"
+    ],
+    "quality_profiles": {
+      "wake_word": {
+        "sample_rate": 8000,
+        "chunk_size": 256
+      },
+      "command": {
+        "sample_rate": 11025,
+        "chunk_size": 512
+      },
+      "conversation": {
+        "sample_rate": 16000,
+        "chunk_size": 1024
+      }
+    }
+  },
+  "speech_recognition": {
+    "language": "ja-JP",
+    "alternative_languages": [
+      "en-US"
+    ]
+  },
+  "wake_words": [
+    "ルクス",
+    "るくす",
+    "ルークス",
+    "るーくす",
+    "Lux",
+    "lux",
+    "LUX"
+  ],
+  "exit_commands": [
+    "終了",
+    "しゅうりょう",
+    "バイバイ",
+    "ばいばい",
+    "exit",
+    "quit"
+  ],
+  "performance_commands": [
+    "統計",
+    "とうけい",
+    "パフォーマンス",
+    "ぱふぉーまんす",
+    "速度",
+    "そくど",
+    "performance",
+    "stats"
+  ],
+  "optimization_commands": [
+    "最適化",
+    "さいてきか",
+    "高速化",
+    "こうそくか",
+    "optimize",
+    "speed up"
+  ],
+  "audio_output": {
+    "rate": 200,
+    "volume": 0.8,
+    "voice_id": null,
+    "max_text_length": 300
+  },
+  "gemini": {
+    "model": "gemini-2.5-flash",
+    "timeout": 30,
+    "debug": false,
+    "retry_count": 2
+  },
+  "system": {
+    "log_level": "INFO",
+    "startup_message": "音声アシスタント ルクス が起動しました。ルクス と呼びかけてください。",
+    "shutdown_message": "音声アシスタントを終了します。お疲れ様でした。",
+    "ready_message": "はい、何でしょうか？"
+  }
+}
