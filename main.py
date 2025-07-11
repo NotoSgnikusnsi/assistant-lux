@@ -8,6 +8,7 @@ import signal
 import sys
 from src.audio_input import AudioInputHandler
 from src.speech_recognition import SpeechRecognizer
+from src.gemini_client import GeminiClient
 
 
 class VoiceAssistant:
@@ -20,6 +21,7 @@ class VoiceAssistant:
         # コンポーネント初期化
         self.audio_handler = AudioInputHandler(recording_duration=5)
         self.speech_recognizer = SpeechRecognizer(language="ja-JP")
+        self.gemini_client = GeminiClient(debug=False)
         
         # 状態管理
         self.is_running = True
@@ -119,19 +121,35 @@ class VoiceAssistant:
     
     def process_command(self, command: str):
         """
-        コマンドを処理（現在はターミナル表示のみ）
+        コマンドを処理し、Gemini CLIに送信して応答を取得
         
         Args:
             command: 認識されたコマンド
         """
         print(f"\n=== コマンド処理 ===")
-        print(f"入力内容: {command}")
-        print("（現在は表示のみ。今後Gemini CLI連携を追加予定）")
+        print(f"📝 入力内容: {command}")
         
         # 終了コマンドのチェック
         if any(word in command.lower() for word in ["終了", "しゅうりょう", "バイバイ", "ばいばい", "exit", "quit"]):
             print("👋 音声アシスタントを終了します")
             self.is_running = False
+            return
+        
+        # Gemini CLIに送信
+        print("🤖 Geminiに問い合わせ中...")
+        try:
+            response = self.gemini_client.send_command(command)
+            
+            if response:
+                print(f"\n💬 【Gemini応答】")
+                print(f"{response}")
+                print(f"{'='*50}")
+            else:
+                print("❌ Geminiからの応答を取得できませんでした")
+                
+        except Exception as e:
+            print(f"❌ Gemini通信エラー: {e}")
+            print("接続状況を確認してください")
     
     def run(self):
         """メインループ実行"""
