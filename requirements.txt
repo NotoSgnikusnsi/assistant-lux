@@ -1,31 +1,17 @@
-# 音声アシスタントシステム - 依存関係
+# 音声アシスタント「ルクス」- 依存関係
 
 # 音声入出力
-sounddevice>=0.4.6
-soundfile>=0.12.1
+pyaudio>=0.2.14           # マイク音声入力（必須）
+numpy>=1.24.0             # 音声データ処理
 
 # 音声認識
-SpeechRecognition>=3.10.0
-openai-whisper>=20240930  # オプション：ローカル音声認識
+SpeechRecognition>=3.10.0  # 音声認識（必須）
 
 # 音声合成
-pyttsx3>=2.90
-gTTS>=2.4.0  # オプション：Google Text-to-Speech
+pyttsx3>=2.90             # テキスト読み上げ（必須）
+pywin32>=308              # Windows Speech API（Windows必須）
 
-# ウェイクワード検知
-pvporcupine>=3.0.0  # 推奨：高精度ウェイクワード検知
-vosk>=0.3.45  # 代替案：軽量音声認識
-
-# データ処理
-numpy>=1.24.0
-
-# 設定管理
-python-dotenv>=1.0.0
-
-# 開発・テスト用
-pytest>=7.0.0  # テスト実行
-pytest-asyncio>=0.21.0  # 非同期テスト
-
-# オプション：GUI開発時
-# tkinter は標準ライブラリのため不要
-# PyQt5>=5.15.0  # 高機能GUI（必要に応じて）
+# オプション：追加機能
+# openai-whisper>=20240930  # ローカル音声認識
+# gTTS>=2.4.0              # Google Text-to-Speech
+# pvporcupine>=3.0.0       # 高精度ウェイクワード検知

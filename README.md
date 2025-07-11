@@ -138,7 +138,11 @@ cd assistant
 
 ### 2. 依存関係のインストール
 ```bash
+# 必要なライブラリをインストール
 pip install -r requirements.txt
+
+# インストール確認
+python -c "import pyaudio, speech_recognition, pyttsx3; print('✅ 全ライブラリ正常')"
 ```
 
 ### 3. Gemini CLIの確認
@@ -176,6 +180,15 @@ python main.py
 ```
 
 ## 🔧 トラブルシューティング
+
+### PyAudioエラーの場合
+```bash
+# PyAudioをインストール
+pip install PyAudio
+
+# インストール確認
+python -c "import pyaudio; print('PyAudio OK')"
+```
 
 ### 音声が聞こえない場合
 1. Windows音量設定の確認

@@ -115,7 +115,7 @@ class GeminiClient:
                 formatted_prompt = prompt
             
             # コマンドを構築（Windows環境を考慮）
-            cmd = ['gemini.cmd', '-p', formatted_prompt]
+            cmd = ['gemini.cmd','-m', 'gemini-2.5-flash' '-p', formatted_prompt]
             
             # デバッグモード
             if self.debug:
