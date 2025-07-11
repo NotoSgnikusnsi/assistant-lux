@@ -82,6 +82,8 @@ class ContinuousSpeechMonitor:
         
         # 制御フラグ
         self.is_running = False
+        self.is_processing = False  # 処理中フラグを追加
+        self.audio_output_active = False  # 音声出力中フラグを追加
         self.monitoring_thread = None
         self.processing_thread = None
         
@@ -97,6 +99,13 @@ class ContinuousSpeechMonitor:
             'phonetic_rejected': 0,
             'basic_detections': 0
         }
+        
+        # 重複検知防止
+        self.last_wake_word_text = ""
+        self.last_wake_word_time = 0
+        self.wake_word_cooldown = 3.0  # 秒単位のクールダウン時間
+        self.audio_output_end_time = 0  # 音声出力終了時刻
+        self.audio_output_suppression_time = 2.0  # 音声出力後の検知抑制時間
         
         print("常時音声監視システム初期化完了")
     
@@ -198,6 +207,15 @@ class ContinuousSpeechMonitor:
                 # VADで音声活動検知
                 is_speech = self._detect_voice_activity(audio_data)
                 
+                # 音声出力中や処理中は音声検知を無視
+                if self.audio_output_active or self.is_processing:
+                    continue
+                
+                # 音声出力後の検知抑制時間チェック
+                current_time = time.time()
+                if current_time - self.audio_output_end_time < self.audio_output_suppression_time:
+                    continue
+                
                 if is_speech:
                     if not self.is_voice_active:
                         # 音声開始
@@ -254,8 +272,11 @@ class ContinuousSpeechMonitor:
     
     def _process_voice_segment(self):
         """音声セグメントの処理"""
-        if not self.voice_buffer:
+        if not self.voice_buffer or self.is_processing:
             return
+        
+        # 処理開始フラグ設定
+        self.is_processing = True
         
         try:
             # 音声バッファを結合
@@ -278,7 +299,12 @@ class ContinuousSpeechMonitor:
                     print(f"📝 通常音声: '{text}'")
         
         except Exception as e:
+            import traceback
             print(f"音声セグメント処理エラー: {e}")
+            print(f"詳細エラー情報: {traceback.format_exc()}")
+        finally:
+            # 処理完了フラグリセット
+            self.is_processing = False
     
     def _recognize_audio_segment(self, audio_data: np.ndarray) -> Optional[str]:
         """
@@ -321,36 +347,58 @@ class ContinuousSpeechMonitor:
         Returns:
             (ウェイクワード検知フラグ, 抽出されたコマンド)
         """
-        if not text:
-            return False, ""
-        
-        self.detection_stats['total_detections'] += 1
-        
-        # 基本的なウェイクワード検知
-        basic_detected, command = self._basic_wake_word_check(text)
-        
-        if basic_detected:
-            self.detection_stats['basic_detections'] += 1
+        try:
+            if not text:
+                return False, ""
             
-            # 音韻的検証を実行
-            if self.use_phonetic_verification and self.phonetic_verifier:
-                verification_result = self._phonetic_verification(text)
+            # 重複検知防止チェック
+            current_time = time.time()
+            if (text == self.last_wake_word_text and 
+                current_time - self.last_wake_word_time < self.wake_word_cooldown):
+                print(f"🔄 重複ウェイクワードを無視: '{text}' (クールダウン: {self.wake_word_cooldown}秒)")
+                return False, ""
+            
+            self.detection_stats['total_detections'] += 1
+            
+            # 基本的なウェイクワード検知
+            basic_detected, command = self._basic_wake_word_check(text)
+            
+            if basic_detected:
+                self.detection_stats['basic_detections'] += 1
                 
-                if verification_result['is_verified']:
-                    self.detection_stats['phonetic_verified'] += 1
-                    print(f"✅ 音韻的検証成功: '{text}' (信頼度: {verification_result['confidence']:.2f})")
-                    print(f"   処理時間: {verification_result['processing_time']:.1f}ms")
-                    return True, command
+                # 音韻的検証を実行
+                if self.use_phonetic_verification and self.phonetic_verifier:
+                    verification_result = self._phonetic_verification(text)
+                    
+                    if verification_result['is_verified']:
+                        self.detection_stats['phonetic_verified'] += 1
+                        print(f"✅ 音韻的検証成功: '{text}' (信頼度: {verification_result['confidence']:.2f})")
+                        print(f"   処理時間: {verification_result['processing_time']:.1f}ms")
+                        
+                        # 成功時に重複防止記録を更新
+                        self.last_wake_word_text = text
+                        self.last_wake_word_time = current_time
+                        
+                        return True, command
+                    else:
+                        self.detection_stats['phonetic_rejected'] += 1
+                        print(f"❌ 音韻的検証失敗: '{text}' (信頼度: {verification_result['confidence']:.2f})")
+                        print(f"   誤検知を防止しました")
+                        return False, ""
                 else:
-                    self.detection_stats['phonetic_rejected'] += 1
-                    print(f"❌ 音韻的検証失敗: '{text}' (信頼度: {verification_result['confidence']:.2f})")
-                    print(f"   誤検知を防止しました")
-                    return False, ""
-            else:
-                # 音韻的検証が無効の場合は基本検知結果を返す
-                return True, command
-        
-        return False, ""
+                    # 音韻的検証が無効の場合は基本検知結果を返す
+                    # 成功時に重複防止記録を更新
+                    self.last_wake_word_text = text
+                    self.last_wake_word_time = current_time
+                    return True, command
+            
+            return False, ""
+            
+        except Exception as e:
+            import traceback
+            print(f"ウェイクワードチェックエラー: {e}")
+            print(f"詳細エラー情報: {traceback.format_exc()}")
+            return False, ""
     
     def _basic_wake_word_check(self, text: str) -> Tuple[bool, str]:
         """
@@ -464,6 +512,25 @@ class ContinuousSpeechMonitor:
             })
         
         return stats
+    
+    def set_audio_output_active(self, active: bool):
+        """
+        音声出力状態を設定
+        
+        Args:
+            active: 音声出力中かどうか
+        """
+        self.audio_output_active = active
+        if active:
+            # 音声出力中は音声バッファをクリア
+            self.voice_buffer = []
+            self.is_voice_active = False
+            self.silence_duration = 0
+            print("🔇 音声出力中のため音声検知を一時停止")
+        else:
+            # 音声出力終了時刻を記録
+            self.audio_output_end_time = time.time()
+            print(f"🎤 音声検知を再開 (抑制時間: {self.audio_output_suppression_time}秒)")
     
     def enable_phonetic_verification(self, enable: bool = True):
         """
