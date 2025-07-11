@@ -12,6 +12,9 @@ webrtcvad>=2.0.10         # 音声活動検知（常時監視）
 pyttsx3>=2.90             # テキスト読み上げ（必須）
 pywin32>=308              # Windows Speech API（Windows必須）
 
+# 音韻的類似度検証（精度向上）
+unicodedata2>=15.0.0      # Unicode正規化（オプション、標準ライブラリでも可）
+
 # 音声処理最適化（オプション）
 pygame>=2.1.0             # キャッシュ音声再生（オプション）
 

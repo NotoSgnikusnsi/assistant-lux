@@ -8,7 +8,7 @@ import signal
 import sys
 import threading
 from src.audio_input import AudioInputHandler
-from src.speech_recognition import SpeechRecognizer
+from src.speech_recognizer import SpeechRecognizer
 from src.continuous_speech import ContinuousSpeechMonitor
 from src.gemini_client import GeminiClient
 from src.audio_output import AudioOutputHandler

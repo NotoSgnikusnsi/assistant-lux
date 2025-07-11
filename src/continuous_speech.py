@@ -1,17 +1,31 @@
 """
 常時音声監視モジュール
 ストリーミング音声認識でウェイクワードを常時監視
+音韻的類似度検証による精度向上機能付き
 """
 
 import threading
 import queue
 import time
+import datetime
 import numpy as np
 import pyaudio
 import speech_recognition as sr
 from typing import Optional, Callable, Tuple
 import webrtcvad
 import collections
+
+# 音韻的類似度検証モジュールをインポート
+try:
+    from phonetic_similarity import EnhancedWakeWordVerifier
+    PHONETIC_VERIFICATION_AVAILABLE = True
+except ImportError:
+    try:
+        from src.phonetic_similarity import EnhancedWakeWordVerifier
+        PHONETIC_VERIFICATION_AVAILABLE = True
+    except ImportError:
+        print("⚠️ 音韻的類似度検証モジュールが見つかりません。基本機能のみ使用します。")
+        PHONETIC_VERIFICATION_AVAILABLE = False
 
 
 class ContinuousSpeechMonitor:
@@ -45,6 +59,16 @@ class ContinuousSpeechMonitor:
         self.recognizer.dynamic_energy_threshold = False
         self.recognizer.pause_threshold = 0.8
         
+        # 音韻的検証器初期化
+        if PHONETIC_VERIFICATION_AVAILABLE:
+            self.phonetic_verifier = EnhancedWakeWordVerifier("ルクス")
+            self.use_phonetic_verification = True
+            print("✅ 音韻的類似度検証機能を有効化")
+        else:
+            self.phonetic_verifier = None
+            self.use_phonetic_verification = False
+            print("⚠️ 音韻的類似度検証機能は無効")
+        
         # VAD (Voice Activity Detection) 初期化
         self.vad = webrtcvad.Vad(2)  # 感度: 0(低) - 3(高)
         self.volume_threshold = 500  # フォールバック用音量閾値
@@ -65,6 +89,14 @@ class ContinuousSpeechMonitor:
         self.audio_queue = queue.Queue()
         self.wake_word_callback = None
         self.command_callback = None
+        
+        # 統計情報
+        self.detection_stats = {
+            'total_detections': 0,
+            'phonetic_verified': 0,
+            'phonetic_rejected': 0,
+            'basic_detections': 0
+        }
         
         print("常時音声監視システム初期化完了")
     
@@ -281,7 +313,7 @@ class ContinuousSpeechMonitor:
     
     def _check_wake_word(self, text: str) -> Tuple[bool, str]:
         """
-        ウェイクワードチェック
+        ウェイクワードチェック（音韻的検証強化版）
         
         Args:
             text: 認識されたテキスト
@@ -292,6 +324,44 @@ class ContinuousSpeechMonitor:
         if not text:
             return False, ""
         
+        self.detection_stats['total_detections'] += 1
+        
+        # 基本的なウェイクワード検知
+        basic_detected, command = self._basic_wake_word_check(text)
+        
+        if basic_detected:
+            self.detection_stats['basic_detections'] += 1
+            
+            # 音韻的検証を実行
+            if self.use_phonetic_verification and self.phonetic_verifier:
+                verification_result = self._phonetic_verification(text)
+                
+                if verification_result['is_verified']:
+                    self.detection_stats['phonetic_verified'] += 1
+                    print(f"✅ 音韻的検証成功: '{text}' (信頼度: {verification_result['confidence']:.2f})")
+                    print(f"   処理時間: {verification_result['processing_time']:.1f}ms")
+                    return True, command
+                else:
+                    self.detection_stats['phonetic_rejected'] += 1
+                    print(f"❌ 音韻的検証失敗: '{text}' (信頼度: {verification_result['confidence']:.2f})")
+                    print(f"   誤検知を防止しました")
+                    return False, ""
+            else:
+                # 音韻的検証が無効の場合は基本検知結果を返す
+                return True, command
+        
+        return False, ""
+    
+    def _basic_wake_word_check(self, text: str) -> Tuple[bool, str]:
+        """
+        基本的なウェイクワードチェック（従来ロジック）
+        
+        Args:
+            text: 認識されたテキスト
+            
+        Returns:
+            (ウェイクワード検知フラグ, 抽出されたコマンド)
+        """
         text_lower = text.lower()
         
         # ウェイクワード検知
@@ -308,7 +378,9 @@ class ContinuousSpeechMonitor:
         fuzzy_matches = {
             "ラックス": "ルクス", "らっくす": "ルクス",  
             "ルックス": "ルクス", "るっくす": "ルクス",
-            "luck": "Lux", "lacks": "Lux"
+            "ルークス": "ルクス", "るーくす": "ルクス",  # 長音変化を追加
+            "リクス": "ルクス", "りくす": "ルクス",      # 母音変化を追加
+            "luck": "Lux", "lacks": "Lux", "lux": "Lux"  # 英語パターン拡張
         }
         
         for fuzzy_word, wake_word in fuzzy_matches.items():
@@ -320,17 +392,117 @@ class ContinuousSpeechMonitor:
         
         return False, ""
     
+    def _phonetic_verification(self, text: str) -> dict:
+        """
+        音韻的検証の実行
+        
+        Args:
+            text: 検証対象テキスト
+            
+        Returns:
+            検証結果辞書
+        """
+        # コンテキスト情報の構築
+        context = {
+            'text_length': len(text),
+            'noise_level': self._estimate_noise_level(),
+            'recognition_confidence': 0.9,  # Google Speech APIの場合は高めに設定
+            'hour': datetime.datetime.now().hour
+        }
+        
+        # 音韻的検証実行
+        is_verified, confidence, details = self.phonetic_verifier.verify_wake_word(text, context)
+        
+        return {
+            'is_verified': is_verified,
+            'confidence': confidence,
+            'processing_time': details.get('processing_time_ms', 0),
+            'threshold_used': details.get('threshold_used', 0.7),
+            'normalized_input': details.get('normalized_input', ''),
+            'performance_warning': details.get('performance_warning', False)
+        }
+    
+    def _estimate_noise_level(self) -> float:
+        """
+        ノイズレベルの推定（簡易版）
+        
+        Returns:
+            推定ノイズレベル (0.0-1.0)
+        """
+        # 実際の実装では音声バッファの分析等を行う
+        # ここでは簡易的な値を返す
+        if len(self.audio_buffer) > 10:
+            # 音声バッファの音量変動からノイズレベルを推定
+            volumes = []
+            for audio_chunk in list(self.audio_buffer)[-10:]:
+                if isinstance(audio_chunk, np.ndarray):
+                    volume = np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2))
+                    volumes.append(volume)
+            
+            if volumes:
+                # 音量の標準偏差が大きいほどノイズが多いと推定
+                std_volume = np.std(volumes)
+                return min(1.0, std_volume / 1000.0)
+        
+        return 0.3  # デフォルト値
+    
+    def get_detection_statistics(self) -> dict:
+        """
+        検知統計情報の取得
+        
+        Returns:
+            統計情報辞書
+        """
+        stats = self.detection_stats.copy()
+        
+        if self.use_phonetic_verification and self.phonetic_verifier:
+            phonetic_stats = self.phonetic_verifier.get_verification_statistics()
+            stats.update({
+                'phonetic_accuracy_rate': phonetic_stats.get('accuracy_rate', 0.0),
+                'phonetic_false_positive_prevention_rate': phonetic_stats.get('false_positive_prevention_rate', 0.0),
+                'average_phonetic_processing_time': phonetic_stats.get('average_processing_time', 0.0)
+            })
+        
+        return stats
+    
+    def enable_phonetic_verification(self, enable: bool = True):
+        """
+        音韻的検証の有効/無効切り替え
+        
+        Args:
+            enable: 有効にするかどうか
+        """
+        if PHONETIC_VERIFICATION_AVAILABLE and self.phonetic_verifier:
+            self.use_phonetic_verification = enable
+            status = "有効" if enable else "無効"
+            print(f"音韻的検証機能を{status}にしました")
+        else:
+            print("音韻的検証機能は利用できません")
+    
     def cleanup(self):
         """リソースクリーンアップ"""
         self.stop_monitoring()
         
         if hasattr(self, 'audio') and self.audio:
             self.audio.terminate()
+        
+        # 統計情報表示
+        if self.use_phonetic_verification:
+            print("\n=== 音韻的検証統計 ===")
+            stats = self.get_detection_statistics()
+            print(f"総検知回数: {stats['total_detections']}")
+            print(f"基本検知成功: {stats['basic_detections']}")
+            print(f"音韻的検証成功: {stats['phonetic_verified']}")
+            print(f"音韻的検証却下: {stats['phonetic_rejected']}")
+            if 'phonetic_accuracy_rate' in stats:
+                print(f"音韻的検証精度: {stats['phonetic_accuracy_rate']:.1%}")
+                print(f"誤検知防止率: {stats['phonetic_false_positive_prevention_rate']:.1%}")
+                print(f"平均処理時間: {stats['average_phonetic_processing_time']:.2f}ms")
 
 
 def test_continuous_speech():
-    """常時音声監視のテスト"""
-    print("=== 常時音声監視テスト ===")
+    """常時音声監視のテスト（音韻的検証対応版）"""
+    print("=== 常時音声監視テスト（音韻的検証付き） ===")
     
     def on_wake_word(text, command):
         print(f"✅ ウェイクワード検知: '{text}', コマンド: '{command}'")
@@ -338,12 +510,44 @@ def test_continuous_speech():
     monitor = ContinuousSpeechMonitor()
     monitor.set_wake_word_callback(on_wake_word)
     
+    # 音韻的検証の状態表示
+    if monitor.use_phonetic_verification:
+        print("🔍 音韻的類似度検証機能: 有効")
+    else:
+        print("⚠️ 音韻的類似度検証機能: 無効")
+    
     try:
         monitor.start_monitoring()
-        print("監視中... Ctrl+Cで終了")
+        print("監視中... 's'キーで統計表示, 'p'キーで音韻的検証切り替え, Ctrl+Cで終了")
+        
+        import sys
+        import select
         
         while True:
-            time.sleep(1)
+            # キー入力チェック（Windows対応）
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    if msvcrt.kbhit():
+                        key = msvcrt.getch().decode('utf-8').lower()
+                        if key == 's':
+                            # 統計表示
+                            stats = monitor.get_detection_statistics()
+                            print(f"\n--- 検知統計 ---")
+                            print(f"総検知: {stats['total_detections']}, "
+                                  f"基本検知: {stats['basic_detections']}, "
+                                  f"音韻検証成功: {stats['phonetic_verified']}, "
+                                  f"音韻検証却下: {stats['phonetic_rejected']}")
+                        elif key == 'p':
+                            # 音韻的検証切り替え
+                            monitor.enable_phonetic_verification(not monitor.use_phonetic_verification)
+                else:
+                    # Linux/Mac用（簡易版）
+                    pass
+            except:
+                pass
+            
+            time.sleep(0.1)
     
     except KeyboardInterrupt:
         print("\n監視終了")
@@ -351,5 +555,33 @@ def test_continuous_speech():
         monitor.cleanup()
 
 
+def test_phonetic_verification_only():
+    """音韻的検証機能のみのテスト"""
+    print("=== 音韻的検証機能単体テスト ===")
+    
+    if not PHONETIC_VERIFICATION_AVAILABLE:
+        print("❌ 音韻的検証機能が利用できません")
+        return
+    
+    # phonetic_similarity.pyのテスト関数を呼び出し
+    from phonetic_similarity import test_phonetic_verification
+    test_phonetic_verification()
+
+
 if __name__ == "__main__":
-    test_continuous_speech()
+    # テストメニュー
+    print("音韻的類似度検証システム テストメニュー")
+    print("1. 音韻的検証機能単体テスト")
+    print("2. 常時音声監視テスト（音韻的検証付き）")
+    
+    try:
+        choice = input("選択してください (1 or 2): ").strip()
+        if choice == "1":
+            test_phonetic_verification_only()
+        elif choice == "2":
+            test_continuous_speech()
+        else:
+            print("常時音声監視テストを実行します")
+            test_continuous_speech()
+    except KeyboardInterrupt:
+        print("\nテストを終了します")
