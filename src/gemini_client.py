@@ -193,6 +193,32 @@ class GeminiClient:
         """
         return self.send_prompt(command, use_assistant_format=True)
     
+    def send_command_fast(self, command: str) -> Optional[str]:
+        """
+        高速コマンド送信（音声アシスタント用の最適化版）
+        
+        Args:
+            command: ユーザーからのコマンド
+            
+        Returns:
+            Geminiからの応答
+        """
+        # 簡単なコマンドかどうかを判定
+        simple_commands = [
+            '電気', '照明', 'ライト', '温度', '時間', '天気', 
+            'つけて', '消して', '教えて', 'どう', 'なに', 'いくつ'
+        ]
+        
+        is_simple = any(word in command for word in simple_commands)
+        
+        if is_simple:
+            # 簡単なコマンドは最適化版を使用
+            return self.send_prompt_optimized(command, max_tokens=100)
+        else:
+            # 複雑なコマンドは通常版を使用
+            return self.send_command(command)
+
+    
     def test_connection(self) -> bool:
         """接続テストを実行"""
         print("\n=== Gemini CLI接続テスト ===")
@@ -227,7 +253,59 @@ class GeminiClient:
         print("   > gemini -p \"こんにちは\"")
         print("="*40)
 
-
+    def send_prompt_optimized(self, prompt: str, max_tokens: int = 100) -> Optional[str]:
+        """
+        最適化されたプロンプト送信（短い応答用）
+        
+        Args:
+            prompt: 送信するプロンプト
+            max_tokens: 最大トークン数制限
+            
+        Returns:
+            Geminiからの応答（失敗時はNone）
+        """
+        try:
+            # 短い応答を促すプロンプト修正
+            optimized_prompt = f"{prompt}\n（簡潔に答えてください。50文字以内で。）"
+            
+            # コマンドを構築（タイムアウトを短縮）
+            cmd = ['gemini.cmd', '-m', self.model, '-p', optimized_prompt]
+            
+            if self.debug:
+                cmd.append('-d')
+                print(f"デバッグ: 最適化コマンド = {' '.join(cmd)}")
+            
+            print(f"📤 Geminiに最適化送信中: '{prompt}'")
+            
+            # より短いタイムアウトで実行
+            short_timeout = min(self.timeout, 15)  # 最大15秒
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                timeout=short_timeout,
+                shell=False
+            )
+            
+            if result.returncode == 0:
+                response = result.stdout.strip()
+                print(f"📥 Gemini最適化応答取得成功")
+                return response
+            else:
+                # フォールバック: 通常の方法を試す
+                return self.send_prompt(prompt, use_assistant_format=True)
+                
+        except subprocess.TimeoutExpired:
+            print(f"⏰ Gemini最適化応答がタイムアウト（{short_timeout}秒）- 通常方法にフォールバック")
+            # タイムアウト時は通常の方法を試す
+            return self.send_prompt(prompt, use_assistant_format=True)
+        except Exception as e:
+            print(f"❌ Gemini最適化通信エラー: {e}")
+            # エラー時は通常の方法を試す
+            return self.send_prompt(prompt, use_assistant_format=True)
 def test_gemini_client():
     """Gemini Client のテスト関数"""
     print("=== Gemini Client テスト ===")
