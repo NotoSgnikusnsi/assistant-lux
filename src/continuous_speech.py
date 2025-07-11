@@ -412,6 +412,26 @@ class ContinuousSpeechMonitor:
         """
         text_lower = text.lower()
         
+        # 特別処理：挨拶パターンでの誤認識対策
+        greeting_corrections = {
+            "おはようございます": "おはようルクス",
+            "こんにちは": "ルクス",
+            "こんばんは": "ルクス",
+            "ありがとうございます": "ルクス"
+        }
+        
+        # 挨拶誤認識の修正
+        for incorrect, correct in greeting_corrections.items():
+            if incorrect in text_lower:
+                print(f"🔧 挨拶誤認識を修正: '{text}' → '{correct}' として処理")
+                # コマンド抽出（修正後のテキストを使用）
+                wake_word_index = correct.lower().find("ルクス".lower())
+                if wake_word_index >= 0:
+                    command = correct[wake_word_index + len("ルクス"):].strip()
+                    command = command.lstrip('、。，,')
+                    return True, command
+                return True, ""
+        
         # ウェイクワード検知
         for wake_word in self.wake_words:
             wake_word_lower = wake_word.lower()
@@ -428,7 +448,14 @@ class ContinuousSpeechMonitor:
             "ルックス": "ルクス", "るっくす": "ルクス",
             "ルークス": "ルクス", "るーくす": "ルクス",  # 長音変化を追加
             "リクス": "ルクス", "りくす": "ルクス",      # 母音変化を追加
-            "luck": "Lux", "lacks": "Lux", "lux": "Lux"  # 英語パターン拡張
+            "ラクス": "ルクス", "らくす": "ルクス",      # よくある誤認識
+            # 特殊な誤認識パターン
+            "ございます": "ルクス",   # 重要：敬語への誤変換対策
+            "おはようございます": "おはようルクス",
+            "こんにちは": "ルクス",   # 挨拶の誤認識対策
+            "ありがとうございます": "ルクス",  # 敬語誤認識対策
+            # 英語パターン拡張
+            "luck": "Lux", "lacks": "Lux", "lux": "Lux"  
         }
         
         for fuzzy_word, wake_word in fuzzy_matches.items():
