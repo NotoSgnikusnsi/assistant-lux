@@ -10,26 +10,53 @@ import tempfile
 import os
 from typing import Optional
 
+# 音韻的類似度検証モジュールのインポートを追加
+try:
+    from .phonetic_similarity import EnhancedWakeWordVerifier
+    PHONETIC_VERIFICATION_AVAILABLE = True
+except ImportError:
+    try:
+        from phonetic_similarity import EnhancedWakeWordVerifier
+        PHONETIC_VERIFICATION_AVAILABLE = True
+    except ImportError:
+        PHONETIC_VERIFICATION_AVAILABLE = False
+        print("⚠️ 音韻的類似度検証モジュールが見つかりません（オプション機能）")
+
 
 class SpeechRecognizer:
     """音声認識を管理するクラス"""
     
-    def __init__(self, language: str = "ja-JP"):
+    def __init__(self, language: str = "ja-JP", enable_phonetic_verification: bool = True):
         """
         初期化
         
         Args:
             language: 認識言語（ja-JP=日本語, en-US=英語）
+            enable_phonetic_verification: 音韻的類似度検証を有効にするか
         """
         self.language = language
         self.recognizer = sr.Recognizer()
         
-        # 認識精度の調整
-        self.recognizer.energy_threshold = 300
+        # 認識精度の調整（ルクス検知に最適化）
+        self.recognizer.energy_threshold = 250  # 少し下げて感度向上
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.8
+        self.recognizer.pause_threshold = 0.6   # 短い発話も認識しやすく
+        self.recognizer.phrase_threshold = 0.3  # フレーズ開始の検知を早く
+        self.recognizer.non_speaking_duration = 0.3  # 無音判定を短く
         
-        print(f"音声認識初期化完了: 言語={language}")
+        # 音韻的類似度検証の設定
+        self.enable_phonetic_verification = enable_phonetic_verification and PHONETIC_VERIFICATION_AVAILABLE
+        self.phonetic_verifier = None
+        
+        if self.enable_phonetic_verification:
+            try:
+                self.phonetic_verifier = EnhancedWakeWordVerifier()
+                print(f"✅ 音韻的類似度検証機能を有効化")
+            except Exception as e:
+                print(f"⚠️ 音韻的類似度検証の初期化に失敗: {e}")
+                self.enable_phonetic_verification = False
+        
+        print(f"音声認識初期化完了: 言語={language}, 音韻検証={self.enable_phonetic_verification}")
     
     def recognize_from_audio_data(self, audio_data: np.ndarray, 
                                 sample_rate: int = 16000) -> Optional[str]:
@@ -56,8 +83,12 @@ class SpeechRecognizer:
                     self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                     audio = self.recognizer.record(source)
                 
-                # Google Speech Recognition を使用
-                text = self.recognizer.recognize_google(audio, language=self.language)
+                # Google Speech Recognition を使用（show_allで複数候補を取得）
+                text = self.recognizer.recognize_google(
+                    audio, 
+                    language=self.language,
+                    show_all=False  # まずは最も可能性の高い結果を取得
+                )
                 print(f"音声認識成功: '{text}'")
                 return text
                 
@@ -103,8 +134,12 @@ class SpeechRecognizer:
                 )
             
             print("音声を認識中...")
-            # Google Speech Recognition を使用
-            text = self.recognizer.recognize_google(audio, language=self.language)
+            # Google Speech Recognition を使用（精度向上設定）
+            text = self.recognizer.recognize_google(
+                audio, 
+                language=self.language,
+                show_all=False
+            )
             print(f"音声認識成功: '{text}'")
             return text
             
@@ -143,6 +178,20 @@ class SpeechRecognizer:
             
         text_lower = text.lower()
         
+        # 特別処理：挨拶パターンでの誤認識対策
+        greeting_corrections = {
+            "おはようございます": "おはようルクス",
+            "こんにちは": "ルクス",
+            "こんばんは": "ルクス",
+            "ありがとうございます": "ルクス"
+        }
+        
+        # 挨拶誤認識の修正
+        for incorrect, correct in greeting_corrections.items():
+            if incorrect in text_lower:
+                print(f"🔧 挨拶誤認識を修正: '{text}' → '{correct}' として処理")
+                return self._extract_command_after_wake_word(correct, "ルクス")
+        
         # 1. 完全一致チェック
         for wake_word in wake_words:
             wake_word_lower = wake_word.lower()
@@ -157,6 +206,16 @@ class SpeechRecognizer:
             "らっくす": ["ルクス", "るくす"],  
             "ルックス": ["ルクス", "るくす"],
             "るっくす": ["ルクス", "るくす"],
+            "リクス": ["ルクス", "るくす"],      # 母音変化対応
+            "りくす": ["ルクス", "るくす"],
+            "ラクス": ["ルクス", "るくす"],      # よくある誤認識
+            "らくす": ["ルクス", "るくす"],
+            # 特殊な誤認識パターン（「おはようルクス」→「おはようございます」など）
+            "ございます": ["ルクス", "るくす"],   # 重要：敬語への誤変換対策
+            "おはようございます": ["おはようルクス", "おはようるくす"],
+            "こんにちは": ["ルクス", "るくす"],   # 挨拶の誤認識対策
+            "ありがとうございます": ["ルクス", "るくす"],  # 敬語誤認識対策
+            # 英語パターン
             "luck": ["Lux", "lux"],
             "LUCK": ["Lux", "LUX"],
             "lacks": ["Lux", "lux"],
@@ -168,6 +227,23 @@ class SpeechRecognizer:
                 matched_wake_word = possible_wake_words[0]
                 print(f"ウェイクワード検知（曖昧一致）: '{recognized_word}' → '{matched_wake_word}' in '{text}'")
                 return self._extract_command_after_wake_word(text, recognized_word)
+        
+        # 3. 音韻的類似度検証によるチェック
+        if self.enable_phonetic_verification and self.phonetic_verifier:
+            for wake_word in wake_words:
+                try:
+                    # 音韻的類似度検証を実行
+                    is_verified, confidence, details = self.phonetic_verifier.verify_wake_word(
+                        text, 
+                        context={'text_length': len(text), 'recognition_confidence': 0.9}
+                    )
+                    if is_verified:
+                        print(f"ウェイクワード検知（音韻的類似度）: '{text}' → '{wake_word}' (信頼度: {confidence:.2f})")
+                        return self._extract_command_after_wake_word(text, wake_word)
+                except Exception as e:
+                    # 音韻的検証でエラーが発生した場合はスキップ
+                    print(f"音韻的検証エラー（スキップ）: {e}")
+                    pass
         
         return False, ""
     
