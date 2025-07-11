@@ -6,10 +6,14 @@ numpy>=1.24.0             # 音声データ処理
 
 # 音声認識
 SpeechRecognition>=3.10.0  # 音声認識（必須）
+webrtcvad>=2.0.10         # 音声活動検知（常時監視）
 
 # 音声合成
 pyttsx3>=2.90             # テキスト読み上げ（必須）
 pywin32>=308              # Windows Speech API（Windows必須）
+
+# 音声処理最適化（オプション）
+pygame>=2.1.0             # キャッシュ音声再生（オプション）
 
 # オプション：追加機能
 # openai-whisper>=20240930  # ローカル音声認識

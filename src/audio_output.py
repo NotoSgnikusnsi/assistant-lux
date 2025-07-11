@@ -1,12 +1,15 @@
 """
 音声出力モジュール
 テキストを音声に変換して再生する機能を提供
+キャッシュシステムによる高速化対応
 """
 
 import pyttsx3
 import threading
 import logging
 from typing import Optional, Dict, Any
+import time
+import os
 
 try:
     import win32com.client
@@ -14,15 +17,19 @@ try:
 except ImportError:
     WINDOWS_SPEECH_AVAILABLE = False
 
+from .audio_cache import AudioCache
+
 
 class AudioOutputHandler:
-    """音声出力を管理するクラス"""
+    """音声出力を管理するクラス（キャッシュ対応）"""
     
     def __init__(self, 
                  rate: int = 200,
                  volume: float = 0.9,
                  voice_id: Optional[str] = None,
-                 use_windows_speech: bool = True):
+                 use_windows_speech: bool = True,
+                 max_text_length: int = 300,
+                 cache_phrases: Optional[list] = None):
         """
         初期化
         
@@ -31,14 +38,39 @@ class AudioOutputHandler:
             volume: 音量（0.0-1.0）
             voice_id: 使用する音声ID（Noneの場合はデフォルト）
             use_windows_speech: Windows Speech APIを優先使用するか
+            max_text_length: 最大テキスト長
+            cache_phrases: キャッシュするフレーズリスト
         """
         self.rate = rate
         self.volume = volume
         self.voice_id = voice_id
         self.use_windows_speech = use_windows_speech and WINDOWS_SPEECH_AVAILABLE
+        self.max_text_length = max_text_length
         
         # ログ設定
         self.logger = logging.getLogger(__name__)
+        
+        # 音声キャッシュシステム初期化
+        if cache_phrases:
+            voice_settings = {
+                'rate': rate,
+                'volume': volume,
+                'voice_id': voice_id
+            }
+            self.audio_cache = AudioCache(cache_phrases, voice_settings)
+            # バックグラウンドでキャッシュ生成開始
+            self.cache_thread = self.audio_cache.pregenerate_cache()
+        else:
+            self.audio_cache = None
+            self.cache_thread = None
+        
+        # 統計情報
+        self.stats = {
+            "total_outputs": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "total_processing_time": 0.0
+        }
         
         # Windows Speech API初期化
         if self.use_windows_speech:
@@ -136,7 +168,7 @@ class AudioOutputHandler:
     
     def speak_text(self, text: str, blocking: bool = True) -> bool:
         """
-        テキストを音声で読み上げ
+        テキストを音声で読み上げ（キャッシュ対応）
         
         Args:
             text: 読み上げるテキスト
@@ -149,68 +181,181 @@ class AudioOutputHandler:
             print("⚠️  読み上げるテキストがありません")
             return False
         
+        start_time = time.time()
+        self.stats["total_outputs"] += 1
+        
         try:
             # MCP STDERRなどのノイズを除去
             clean_text = self._clean_text(text)
             
             print(f"🔊 音声出力: '{clean_text[:50]}{'...' if len(clean_text) > 50 else ''}'")
-            print(f"DEBUG: クリーン前の長さ: {len(text)}, クリーン後の長さ: {len(clean_text)}")
             
             if not clean_text.strip():
                 print("⚠️  クリーン後のテキストが空です")
                 return False
             
-            # Windows Speech APIを優先使用
-            if self.use_windows_speech and self.win_speech:
-                print("DEBUG: Windows Speech API使用")
-                try:
-                    if blocking:
-                        self.win_speech.Speak(clean_text)
-                    else:
-                        self.win_speech.Speak(clean_text, 1)  # 非同期フラグ
-                    print("DEBUG: Windows Speech API再生完了")
-                    return True
-                except Exception as e:
-                    print(f"⚠️ Windows Speech APIエラー: {e}")
-                    # フォールバックでpyttsx3を使用
+            # キャッシュから音声を取得試行
+            cached_audio = None
+            if self.audio_cache:
+                cached_audio = self.audio_cache.get_cached_audio(clean_text)
+                if cached_audio:
+                    self.stats["cache_hits"] += 1
+                    print("⚡ キャッシュから音声再生")
+                    # キャッシュされた音声を再生
+                    return self._play_cached_audio(cached_audio, blocking)
+                else:
+                    self.stats["cache_misses"] += 1
             
-            # pyttsx3エンジンを使用
-            if not self.engine:
-                print("❌ 音声エンジンが利用できません")
-                return False
-            
-            if blocking:
-                # 同期実行（読み上げ完了まで待機）
-                print("DEBUG: pyttsx3同期音声再生開始")
-                
-                # エンジンをリセットして音量を確実に設定
-                self.engine.stop()
-                self.engine.setProperty('volume', 1.0)
-                
-                # テキストを設定して実行
-                self.engine.say(clean_text)
-                self.engine.runAndWait()
-                print("DEBUG: pyttsx3同期音声再生完了")
-            else:
-                # 非同期実行（バックグラウンドで読み上げ）
-                print("DEBUG: pyttsx3非同期音声再生開始")
-                def speak_async():
-                    self.engine.stop()
-                    self.engine.setProperty('volume', 1.0)
-                    self.engine.say(clean_text)
-                    self.engine.runAndWait()
-                    print("DEBUG: pyttsx3非同期音声再生完了")
-                
-                thread = threading.Thread(target=speak_async)
-                thread.daemon = True
-                thread.start()
-            
-            return True
+            # キャッシュにない場合は通常の音声合成
+            return self._synthesize_and_play(clean_text, blocking)
             
         except Exception as e:
             print(f"❌ 音声出力エラー: {e}")
             self.logger.error(f"Speech output error: {e}")
             return False
+        finally:
+            # 処理時間を記録
+            processing_time = time.time() - start_time
+            self.stats["total_processing_time"] += processing_time
+    
+    def _play_cached_audio(self, audio_data: bytes, blocking: bool = True) -> bool:
+        """
+        キャッシュされた音声データを再生
+        
+        Args:
+            audio_data: 音声データ
+            blocking: 同期再生するか
+            
+        Returns:
+            再生成功したかどうか
+        """
+        try:
+            import pygame
+            pygame.mixer.init()
+            
+            # バイトデータから音声を再生
+            import io
+            audio_buffer = io.BytesIO(audio_data)
+            pygame.mixer.music.load(audio_buffer)
+            pygame.mixer.music.play()
+            
+            if blocking:
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.1)
+            
+            return True
+            
+        except ImportError:
+            # pygameが利用できない場合は一時ファイルで再生
+            return self._play_cached_audio_fallback(audio_data, blocking)
+        except Exception as e:
+            print(f"⚠️ キャッシュ音声再生エラー: {e}")
+            return False
+    
+    def _play_cached_audio_fallback(self, audio_data: bytes, blocking: bool = True) -> bool:
+        """
+        キャッシュ音声のフォールバック再生（一時ファイル使用）
+        
+        Args:
+            audio_data: 音声データ
+            blocking: 同期再生するか
+            
+        Returns:
+            再生成功したかどうか
+        """
+        try:
+            import tempfile
+            import subprocess
+            
+            # 一時ファイルに保存
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_file.write(audio_data)
+                temp_file_path = temp_file.name
+            
+            # Windowsの場合はmedia playerで再生
+            if os.name == 'nt':
+                if blocking:
+                    subprocess.run(["powershell", "-c", f"(New-Object Media.SoundPlayer '{temp_file_path}').PlaySync()"], 
+                                 capture_output=True)
+                else:
+                    subprocess.Popen(["powershell", "-c", f"(New-Object Media.SoundPlayer '{temp_file_path}').Play()"])
+            
+            # 一時ファイルを削除
+            if blocking:
+                os.unlink(temp_file_path)
+            else:
+                # 非同期の場合は遅延削除
+                def delayed_cleanup():
+                    time.sleep(5)
+                    try:
+                        os.unlink(temp_file_path)
+                    except:
+                        pass
+                threading.Thread(target=delayed_cleanup, daemon=True).start()
+            
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ フォールバック音声再生エラー: {e}")
+            return False
+    
+    def _synthesize_and_play(self, clean_text: str, blocking: bool = True) -> bool:
+        """
+        音声合成して再生（従来の方法）
+        
+        Args:
+            clean_text: クリーンアップされたテキスト
+            blocking: 同期再生するか
+            
+        Returns:
+            再生成功したかどうか
+        """
+        # Windows Speech APIを優先使用
+        if self.use_windows_speech and self.win_speech:
+            print("DEBUG: Windows Speech API使用")
+            try:
+                if blocking:
+                    self.win_speech.Speak(clean_text)
+                else:
+                    self.win_speech.Speak(clean_text, 1)  # 非同期フラグ
+                print("DEBUG: Windows Speech API再生完了")
+                return True
+            except Exception as e:
+                print(f"⚠️ Windows Speech APIエラー: {e}")
+                # フォールバックでpyttsx3を使用
+        
+        # pyttsx3エンジンを使用
+        if not self.engine:
+            print("❌ 音声エンジンが利用できません")
+            return False
+        
+        if blocking:
+            # 同期実行（読み上げ完了まで待機）
+            print("DEBUG: pyttsx3同期音声再生開始")
+            
+            # エンジンをリセットして音量を確実に設定
+            self.engine.stop()
+            self.engine.setProperty('volume', 1.0)
+            
+            # テキストを設定して実行
+            self.engine.say(clean_text)
+            self.engine.runAndWait()
+            print("DEBUG: pyttsx3同期音声再生完了")
+        else:
+            # 非同期実行（バックグラウンドで読み上げ）
+            print("DEBUG: pyttsx3非同期音声再生開始")
+            def speak_async():
+                self.engine.stop()
+                self.engine.setProperty('volume', 1.0)
+                self.engine.say(clean_text)
+                self.engine.runAndWait()
+                print("DEBUG: pyttsx3非同期音声再生完了")
+            
+            thread = threading.Thread(target=speak_async)
+            thread.daemon = True
+            thread.start()
+        
+        return True
     
     def _clean_text(self, text: str) -> str:
         """
@@ -331,6 +476,53 @@ def test_audio_output():
     # インタラクティブテスト
     print("\n--- インタラクティブテスト ---")
     print("読み上げるテキストを入力してください（'quit'で終了）:")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        音声出力の統計情報を取得
+        
+        Returns:
+            統計情報辞書
+        """
+        total_outputs = self.stats["total_outputs"]
+        cache_hits = self.stats["cache_hits"]
+        cache_misses = self.stats["cache_misses"]
+        
+        stats = self.stats.copy()
+        
+        # 計算統計を追加
+        if total_outputs > 0:
+            stats["cache_hit_rate"] = cache_hits / total_outputs
+            stats["average_processing_time"] = self.stats["total_processing_time"] / total_outputs
+        else:
+            stats["cache_hit_rate"] = 0.0
+            stats["average_processing_time"] = 0.0
+        
+        # キャッシュシステムの統計も追加
+        if self.audio_cache:
+            cache_stats = self.audio_cache.get_cache_stats()
+            stats.update(cache_stats)
+        
+        return stats
+    
+    def cleanup(self):
+        """リソースの清理"""
+        try:
+            if self.engine:
+                self.engine.stop()
+            if self.audio_cache:
+                self.audio_cache.clear_cache()
+            print("🔒 音声出力システム終了")
+        except Exception as e:
+            self.logger.error(f"音声出力クリーンアップエラー: {e}")
+
+
+def test_audio_output():
+    """音声出力のテスト関数"""
+    print("=== 音声出力テスト ===")
+    audio_output = AudioOutputHandler(rate=200, volume=0.8)
+    
+    print("テキストを入力してください（quit/exit/終了で終了）:")
     
     try:
         while True:

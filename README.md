@@ -109,6 +109,7 @@ c:\WorkFolders\dev\assistant\
     "max_text_length": 500
   },
   "gemini": {
+    "model": "gemini-2.5-flash",
     "timeout": 30,
     "debug": false,
     "retry_count": 2
@@ -223,6 +224,7 @@ cat logs/session_*.log
 - ウェイクワードの追加: `config.json`の`wake_words`配列に追加
 - 音声速度の調整: `audio_output.rate`を変更（100-300推奨）
 - タイムアウト時間: `gemini.timeout`や`audio_input.microphone_timeout`を調整
+- **Geminiモデル変更**: `gemini.model`を変更（例: "gemini-2.5-pro", "gemini-2.5-flash"）
 
 ## 📄 ライセンス
 

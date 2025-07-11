@@ -14,21 +14,24 @@ class GeminiClient:
     
     def __init__(self, 
                  debug: bool = False,
-                 timeout: int = 30):
+                 timeout: int = 30,
+                 model: str = "gemini-2.5-flash"):
         """
         初期化
         
         Args:
             debug: デバッグモード
             timeout: コマンド実行のタイムアウト（秒）
+            model: 使用するGeminiモデル
         """
         self.debug = debug
         self.timeout = timeout
+        self.model = model
         
         # ログ設定
         self.logger = logging.getLogger(__name__)
         
-        print(f"Gemini CLI初期化完了: デバッグ={debug}")
+        print(f"Gemini CLI初期化完了: モデル={self.model}, デバッグ={debug}, タイムアウト={timeout}秒")
         
         # Gemini CLIの動作確認
         self._check_gemini_cli()
@@ -115,7 +118,7 @@ class GeminiClient:
                 formatted_prompt = prompt
             
             # コマンドを構築（Windows環境を考慮）
-            cmd = ['gemini.cmd','-m', 'gemini-2.5-flash' '-p', formatted_prompt]
+            cmd = ['gemini.cmd', '-m', self.model, '-p', formatted_prompt]
             
             # デバッグモード
             if self.debug:
@@ -142,7 +145,7 @@ class GeminiClient:
                 return response
             else:
                 # .cmdが失敗した場合、通常のgeminiを試す
-                cmd_fallback = ['gemini', '-p', formatted_prompt]
+                cmd_fallback = ['gemini', '-m', self.model, '-p', formatted_prompt]
                 if self.debug:
                     cmd_fallback.append('-d')
                 
