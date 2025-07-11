@@ -74,8 +74,9 @@ class VoiceAssistant:
             model=gemini_config.get("model", "gemini-2.5-flash")
         )
         
-        # 音声出力（キャッシュ対応）
-        cache_phrases = optimization_config.get("cache_phrases", []) if optimization_config.get("pregenerated_cache", False) else None
+        # 音声出力（キャッシュ機能を一時的に無効化）
+        # cache_phrases = optimization_config.get("cache_phrases", []) if optimization_config.get("pregenerated_cache", False) else None
+        cache_phrases = None  # キャッシュ機能を一時的に無効化
         self.audio_output = AudioOutputHandler(
             rate=audio_output_config.get("rate", 180),
             volume=audio_output_config.get("volume", 0.8),

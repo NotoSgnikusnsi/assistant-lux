@@ -195,16 +195,23 @@ class AudioOutputHandler:
                 return False
             
             # キャッシュから音声を取得試行
-            cached_audio = None
             if self.audio_cache:
                 cached_audio = self.audio_cache.get_cached_audio(clean_text)
                 if cached_audio:
                     self.stats["cache_hits"] += 1
                     print("⚡ キャッシュから音声再生")
                     # キャッシュされた音声を再生
-                    return self._play_cached_audio(cached_audio, blocking)
+                    cache_success = self._play_cached_audio(cached_audio, blocking)
+                    if cache_success:
+                        return True
+                    else:
+                        print("⚠️ キャッシュ再生失敗、通常の音声合成にフォールバック")
+                        self.stats["cache_misses"] += 1
                 else:
                     self.stats["cache_misses"] += 1
+            else:
+                # キャッシュが無効の場合
+                self.stats["cache_misses"] += 1
             
             # キャッシュにない場合は通常の音声合成
             return self._synthesize_and_play(clean_text, blocking)
@@ -229,9 +236,12 @@ class AudioOutputHandler:
         Returns:
             再生成功したかどうか
         """
+        print("DEBUG: キャッシュ音声再生開始")
+        
+        # 最初にpygameでの再生を試行
         try:
             import pygame
-            pygame.mixer.init()
+            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
             
             # バイトデータから音声を再生
             import io
@@ -239,18 +249,23 @@ class AudioOutputHandler:
             pygame.mixer.music.load(audio_buffer)
             pygame.mixer.music.play()
             
+            print("DEBUG: pygame音声再生開始")
+            
             if blocking:
                 while pygame.mixer.music.get_busy():
                     time.sleep(0.1)
+                print("DEBUG: pygame音声再生完了")
             
             return True
             
         except ImportError:
+            print("DEBUG: pygameが利用できません、フォールバック再生を使用")
             # pygameが利用できない場合は一時ファイルで再生
             return self._play_cached_audio_fallback(audio_data, blocking)
         except Exception as e:
-            print(f"⚠️ キャッシュ音声再生エラー: {e}")
-            return False
+            print(f"⚠️ pygame音声再生エラー: {e}")
+            print("DEBUG: フォールバック再生に切り替え")
+            return self._play_cached_audio_fallback(audio_data, blocking)
     
     def _play_cached_audio_fallback(self, audio_data: bytes, blocking: bool = True) -> bool:
         """
@@ -263,6 +278,8 @@ class AudioOutputHandler:
         Returns:
             再生成功したかどうか
         """
+        print("DEBUG: フォールバック音声再生開始")
+        
         try:
             import tempfile
             import subprocess
@@ -272,28 +289,57 @@ class AudioOutputHandler:
                 temp_file.write(audio_data)
                 temp_file_path = temp_file.name
             
-            # Windowsの場合はmedia playerで再生
-            if os.name == 'nt':
-                if blocking:
-                    subprocess.run(["powershell", "-c", f"(New-Object Media.SoundPlayer '{temp_file_path}').PlaySync()"], 
-                                 capture_output=True)
-                else:
-                    subprocess.Popen(["powershell", "-c", f"(New-Object Media.SoundPlayer '{temp_file_path}').Play()"])
+            print(f"DEBUG: 一時ファイル作成: {temp_file_path}")
             
-            # 一時ファイルを削除
-            if blocking:
-                os.unlink(temp_file_path)
-            else:
-                # 非同期の場合は遅延削除
-                def delayed_cleanup():
-                    time.sleep(5)
+            # Windowsの場合はシンプルなPowerShellコマンドで再生
+            if os.name == 'nt':
+                try:
+                    if blocking:
+                        # 同期再生 - SoundPlayerクラスを使用
+                        cmd = f'$player = New-Object System.Media.SoundPlayer; $player.SoundLocation = "{temp_file_path}"; $player.PlaySync()'
+                        result = subprocess.run(["powershell", "-Command", cmd], 
+                                              capture_output=True, text=True, timeout=10)
+                        print(f"DEBUG: PowerShell同期再生完了: {result.returncode}")
+                        
+                        # ファイル削除
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+                        
+                        return result.returncode == 0
+                    else:
+                        # 非同期再生
+                        cmd = f'$player = New-Object System.Media.SoundPlayer; $player.SoundLocation = "{temp_file_path}"; $player.Play()'
+                        subprocess.Popen(["powershell", "-Command", cmd])
+                        print("DEBUG: PowerShell非同期再生開始")
+                        
+                        # 遅延削除
+                        def delayed_cleanup():
+                            time.sleep(5)
+                            try:
+                                os.unlink(temp_file_path)
+                            except:
+                                pass
+                        threading.Thread(target=delayed_cleanup, daemon=True).start()
+                        
+                        return True
+                        
+                except Exception as e:
+                    print(f"⚠️ PowerShell再生エラー: {e}")
+                    # ファイルクリーンアップ
                     try:
                         os.unlink(temp_file_path)
                     except:
                         pass
-                threading.Thread(target=delayed_cleanup, daemon=True).start()
-            
-            return True
+                    return False
+            else:
+                # Windows以外の場合
+                try:
+                    os.unlink(temp_file_path)
+                except:
+                    pass
+                return False
             
         except Exception as e:
             print(f"⚠️ フォールバック音声再生エラー: {e}")
@@ -315,10 +361,13 @@ class AudioOutputHandler:
             print("DEBUG: Windows Speech API使用")
             try:
                 if blocking:
+                    print("DEBUG: Windows Speech API同期再生開始")
                     self.win_speech.Speak(clean_text)
+                    print("DEBUG: Windows Speech API同期再生完了")
                 else:
+                    print("DEBUG: Windows Speech API非同期再生開始")
                     self.win_speech.Speak(clean_text, 1)  # 非同期フラグ
-                print("DEBUG: Windows Speech API再生完了")
+                    print("DEBUG: Windows Speech API非同期再生完了")
                 return True
             except Exception as e:
                 print(f"⚠️ Windows Speech APIエラー: {e}")
