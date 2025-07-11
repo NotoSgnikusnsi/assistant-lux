@@ -128,12 +128,36 @@ class ConfigManager:
     def save_config(self):
         """設定をファイルに保存"""
         try:
+            # バックアップを作成
+            backup_path = f"{self.config_path}.backup"
+            if os.path.exists(self.config_path):
+                import shutil
+                shutil.copy2(self.config_path, backup_path)
+            
+            # 設定を保存
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
-            print(f"✅ 設定保存完了: {self.config_path}")
+            
+            print(f"✅ 設定ファイル保存完了: {self.config_path}")
+            return True
+            
         except Exception as e:
-            print(f"❌ 設定保存エラー: {e}")
+            print(f"❌ 設定ファイル保存エラー: {e}")
+            # バックアップから復元を試行
+            if os.path.exists(backup_path):
+                try:
+                    import shutil
+                    shutil.copy2(backup_path, self.config_path)
+                    print("🔄 バックアップから設定を復元しました")
+                except Exception as restore_error:
+                    print(f"❌ バックアップ復元エラー: {restore_error}")
+            return False
     
+    @property
+    def config(self) -> Dict[str, Any]:
+        """設定辞書への直接アクセス（最適化機能用）"""
+        return self._config
+
     def get_audio_input_config(self) -> Dict[str, Any]:
         """音声入力設定を取得"""
         return self.get("audio_input", {})
