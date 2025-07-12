@@ -83,19 +83,107 @@ class AudioInputHandler:
         except KeyboardInterrupt:
             print("\n音声監視を終了します")
     
-    def record_audio(self, duration: Optional[int] = None) -> np.ndarray:
+    def record_audio_with_vad(self, 
+                             max_duration: int = 10,
+                             silence_threshold: float = 0.005,
+                             min_duration: float = 0.5,
+                             post_silence_duration: float = 1.0) -> np.ndarray:
         """
-        音声を録音
+        音声活動検出(VAD)を使用したスマート録音
         
         Args:
-            duration: 録音時間（秒）。Noneの場合はデフォルト時間
+            max_duration: 最大録音時間（秒）
+            silence_threshold: 無音判定の閾値
+            min_duration: 最小録音時間（秒）
+            post_silence_duration: 発話終了後の待機時間（秒）
+            
+        Returns:
+            録音された音声データ
+        """
+        print("🎤 音声検出を開始...")
+        
+        # 録音データクリア
+        self.recorded_data = []
+        self.is_recording = True
+        
+        start_time = time.time()
+        last_voice_time = start_time
+        voice_detected = False
+        silence_start_time = None
+        
+        # 音声ストリーム開始
+        with sd.InputStream(
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            callback=self.audio_callback,
+            blocksize=self.chunk_size
+        ):
+            while self.is_recording:
+                current_time = time.time()
+                
+                # 最大録音時間チェック
+                if current_time - start_time > max_duration:
+                    print(f"⏰ 最大録音時間({max_duration}秒)に到達")
+                    break
+                
+                try:
+                    # キューからデータを取得（短いタイムアウト）
+                    data = self.audio_queue.get(timeout=0.05)
+                    self.recorded_data.append(data)
+                    
+                    # 音声レベル計算
+                    volume = np.sqrt(np.mean(data**2))
+                    
+                    # 音声検出
+                    if volume > silence_threshold:
+                        if not voice_detected:
+                            print("🔊 音声検出")
+                            voice_detected = True
+                        last_voice_time = current_time
+                        silence_start_time = None
+                    else:
+                        # 無音検出
+                        if voice_detected and silence_start_time is None:
+                            silence_start_time = current_time
+                        
+                        # 発話終了判定
+                        if (voice_detected and 
+                            silence_start_time and 
+                            current_time - silence_start_time > post_silence_duration and
+                            current_time - start_time > min_duration):
+                            print("🔇 発話終了を検出")
+                            break
+                            
+                except queue.Empty:
+                    continue
+        
+        self.is_recording = False
+        
+        # 録音データを結合
+        if self.recorded_data:
+            audio_data = np.concatenate(self.recorded_data, axis=0)
+            duration = len(audio_data) / self.sample_rate
+            print(f"✅ 録音完了: {duration:.2f}秒")
+            return audio_data
+        else:
+            print("⚠️ 録音データがありません")
+            return np.array([])
+    
+    def record_audio(self, duration: Optional[int] = None) -> np.ndarray:
+        """
+        音声を録音（後方互換性のため残す）
+        
+        Args:
+            duration: 録音時間（秒）。Noneの場合はVADを使用
             
         Returns:
             録音された音声データ
         """
         if duration is None:
-            duration = self.recording_duration
-            
+            # VADを使用したスマート録音
+            return self.record_audio_with_vad()
+        
+        # 従来の固定時間録音
         print(f"録音開始: {duration}秒間録音します...")
         
         # 録音データクリア
@@ -178,6 +266,101 @@ class AudioInputHandler:
                     consecutive_silence = 0
         
         return False
+    
+    def stream_audio_realtime(self, 
+                             callback: Callable[[np.ndarray], bool],
+                             chunk_duration: float = 0.1) -> None:
+        """
+        リアルタイム音声ストリーミング
+        
+        Args:
+            callback: 音声チャンクを処理するコールバック関数
+                     戻り値がFalseの場合、ストリーミングを停止
+            chunk_duration: チャンクの時間間隔（秒）
+        """
+        print("🔄 リアルタイム音声ストリーミング開始")
+        
+        chunk_samples = int(self.sample_rate * chunk_duration)
+        buffer = np.array([])
+        
+        self.is_recording = True
+        
+        with sd.InputStream(
+            samplerate=self.sample_rate,
+            channels=self.channels,
+            callback=self.audio_callback,
+            blocksize=self.chunk_size
+        ):
+            while self.is_recording:
+                try:
+                    # キューからデータを取得
+                    data = self.audio_queue.get(timeout=0.05)
+                    buffer = np.concatenate([buffer, data.flatten()])
+                    
+                    # チャンクサイズに達したら処理
+                    while len(buffer) >= chunk_samples:
+                        chunk = buffer[:chunk_samples]
+                        buffer = buffer[chunk_samples:]
+                        
+                        # コールバック実行
+                        continue_streaming = callback(chunk)
+                        if not continue_streaming:
+                            self.is_recording = False
+                            break
+                            
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    print(f"ストリーミングエラー: {e}")
+                    break
+        
+        print("🛑 リアルタイム音声ストリーミング終了")
+    
+    def capture_wake_word_optimized(self, 
+                                   wake_word_detector: Callable[[np.ndarray], tuple[bool, str]],
+                                   max_capture_time: float = 5.0) -> tuple[bool, str, np.ndarray]:
+        """
+        ウェイクワード検出に最適化された音声キャプチャ
+        
+        Args:
+            wake_word_detector: ウェイクワード検出関数
+            max_capture_time: 最大キャプチャ時間（秒）
+            
+        Returns:
+            (ウェイクワード検出, 認識テキスト, 音声データ)
+        """
+        detected_text = ""
+        captured_audio = np.array([])
+        wake_word_found = False
+        
+        start_time = time.time()
+        
+        def process_chunk(chunk: np.ndarray) -> bool:
+            nonlocal detected_text, captured_audio, wake_word_found
+            
+            # 音声データを蓄積
+            captured_audio = np.concatenate([captured_audio, chunk])
+            
+            # 最大時間チェック
+            if time.time() - start_time > max_capture_time:
+                return False
+            
+            # 一定量のデータが蓄積されたらウェイクワード検出を試行
+            if len(captured_audio) > self.sample_rate * 1.0:  # 1秒以上
+                try:
+                    found, text = wake_word_detector(captured_audio)
+                    if found:
+                        detected_text = text
+                        wake_word_found = True
+                        return False  # ストリーミング停止
+                except Exception as e:
+                    print(f"ウェイクワード検出エラー: {e}")
+            
+            return True  # 継続
+        
+        self.stream_audio_realtime(process_chunk, chunk_duration=0.1)
+        
+        return wake_word_found, detected_text, captured_audio
 
 
 def test_audio_input():

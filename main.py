@@ -73,9 +73,19 @@ class VoiceAssistant:
             self.parallel_speech = None
         
         # コンポーネント初期化
+        # VAD設定を取得
+        vad_config = self.config.get_vad_config()
+        
         self.audio_handler = AudioInputHandler(
             recording_duration=audio_input_config.get("recording_duration", 5)
         )
+        
+        # VAD設定をパフォーマンス向上のため保存
+        self.vad_max_duration = vad_config.get("max_duration", 5)
+        self.vad_silence_threshold = vad_config.get("silence_threshold", 0.005)
+        self.vad_min_duration = vad_config.get("min_duration", 0.3)
+        self.vad_post_silence_duration = vad_config.get("post_silence_duration", 0.8)
+        
         self.speech_recognizer = SpeechRecognizer(
             language=speech_config.get("language", "ja-JP")
         )
@@ -198,11 +208,16 @@ class VoiceAssistant:
             print("\n--- 追加コマンド入力待機 ---")
             print("ご用件をお話しください（10秒以内）...")
             
-            # 音声入力ステップ計測
+            # 音声入力ステップ計測（VAD使用）
             step = self.performance_monitor.start_step("audio_input")
             try:
-                # 音声データを録音
-                audio_data = self.audio_handler.record_audio(duration=10)
+                # VADを使用したスマート録音（設定ファイルからパラメータを取得）
+                audio_data = self.audio_handler.record_audio_with_vad(
+                    max_duration=self.vad_max_duration,
+                    silence_threshold=self.vad_silence_threshold,
+                    min_duration=self.vad_min_duration,
+                    post_silence_duration=self.vad_post_silence_duration
+                )
                 self.performance_monitor.finish_step("audio_input", True)
             except Exception as e:
                 self.performance_monitor.finish_step("audio_input", False, str(e))

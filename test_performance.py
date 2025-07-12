@@ -37,6 +37,7 @@ def test_performance():
     speech_config = config.get_speech_recognition_config()
     audio_output_config = config.get_audio_output_config()
     gemini_config = config.get_gemini_config()
+    vad_config = config.get_vad_config()  # VAD設定を取得
     
     audio_handler = AudioInputHandler(
         recording_duration=audio_input_config.get("recording_duration", 5)
@@ -158,6 +159,7 @@ def run_audio_input_test():
     
     audio_input_config = config.get_audio_input_config()
     speech_config = config.get_speech_recognition_config()
+    vad_config = config.get_vad_config()  # VAD設定を取得
     
     audio_handler = AudioInputHandler(
         recording_duration=audio_input_config.get("recording_duration", 5)
@@ -167,13 +169,18 @@ def run_audio_input_test():
         language=speech_config.get("language", "ja-JP")
     )
     
-    session_id = monitor.start_session("実音声入力テスト")
+    session_id = monitor.start_session("実音声入力テスト（VAD最適化）")
     
     try:
-        # 音声入力
+        # VADを使った音声入力
         step = monitor.start_step("audio_input")
-        print("🎤 5秒間話してください...")
-        audio_data = audio_handler.record_audio(duration=5)
+        print("🎤 話してください（発話終了を自動検出します）...")
+        audio_data = audio_handler.record_audio_with_vad(
+            max_duration=vad_config.get("max_duration", 5),
+            silence_threshold=vad_config.get("silence_threshold", 0.005),
+            min_duration=vad_config.get("min_duration", 0.3),
+            post_silence_duration=vad_config.get("post_silence_duration", 0.8)
+        )
         monitor.finish_step("audio_input", True)
         
         if len(audio_data) > 0:

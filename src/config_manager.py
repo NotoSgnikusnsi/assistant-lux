@@ -186,6 +186,26 @@ class ConfigManager:
         """システムメッセージを取得"""
         return self.get("system", {})
     
+    def get_vad_config(self) -> dict:
+        """VAD（音声活動検出）設定を取得"""
+        vad_config = self._config.get("audio_input", {}).get("vad_settings", {})
+        
+        # デフォルト値
+        default_config = {
+            "max_duration": 5,
+            "silence_threshold": 0.005,
+            "min_duration": 0.3,
+            "post_silence_duration": 0.8,
+            "chunk_duration": 0.1
+        }
+        
+        # デフォルト値とマージ
+        for key, default_value in default_config.items():
+            if key not in vad_config:
+                vad_config[key] = default_value
+        
+        return vad_config
+    
     def print_config(self):
         """現在の設定を表示"""
         print("\n=== 現在の設定 ===")
