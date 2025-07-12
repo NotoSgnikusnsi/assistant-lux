@@ -104,7 +104,9 @@ class VoiceAssistant:
             volume=audio_output_config.get("volume", 0.8),
             voice_id=audio_output_config.get("voice_id"),
             max_text_length=audio_output_config.get("max_text_length", 300),
-            cache_phrases=cache_phrases
+            cache_phrases=cache_phrases,
+            enable_sound_effects=audio_output_config.get("enable_sound_effects", True),
+            sound_effect_volume=audio_output_config.get("sound_effect_volume", 0.5)
         )
         
         # 状態管理
@@ -118,7 +120,8 @@ class VoiceAssistant:
         # 常時音声監視システム初期化
         self.continuous_monitor = ContinuousSpeechMonitor(
             language=speech_config.get("language", "ja-JP"),
-            wake_words=self.wake_words
+            wake_words=self.wake_words,
+            audio_handler=self.audio_output
         )
         self.continuous_monitor.set_wake_word_callback(self._on_wake_word_detected)
         

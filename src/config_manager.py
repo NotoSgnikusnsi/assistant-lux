@@ -61,7 +61,9 @@ class ConfigManager:
                 "rate": 180,
                 "volume": 0.8,
                 "voice_id": None,
-                "max_text_length": 500
+                "max_text_length": 500,
+                "enable_sound_effects": True,
+                "sound_effect_volume": 0.5
             },
             "gemini": {
                 "timeout": 30,

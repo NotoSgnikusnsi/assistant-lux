@@ -19,6 +19,13 @@ except ImportError:
 
 from .audio_cache import AudioCache
 
+# 効果音システムのインポート
+try:
+    from .sound_effects import SoundEffectPlayer
+    SOUND_EFFECTS_AVAILABLE = True
+except ImportError:
+    SOUND_EFFECTS_AVAILABLE = False
+
 
 class AudioOutputHandler:
     """音声出力を管理するクラス（キャッシュ対応）"""
@@ -29,7 +36,9 @@ class AudioOutputHandler:
                  voice_id: Optional[str] = None,
                  use_windows_speech: bool = True,
                  max_text_length: int = 300,
-                 cache_phrases: Optional[list] = None):
+                 cache_phrases: Optional[list] = None,
+                 enable_sound_effects: bool = True,
+                 sound_effect_volume: float = 0.5):
         """
         初期化
         
@@ -40,6 +49,8 @@ class AudioOutputHandler:
             use_windows_speech: Windows Speech APIを優先使用するか
             max_text_length: 最大テキスト長
             cache_phrases: キャッシュするフレーズリスト
+            enable_sound_effects: 効果音を有効にするか
+            sound_effect_volume: 効果音の音量（0.0-1.0）
         """
         self.rate = rate
         self.volume = volume
@@ -71,6 +82,22 @@ class AudioOutputHandler:
             "cache_misses": 0,
             "total_processing_time": 0.0
         }
+        
+        # 効果音システム初期化
+        self.enable_sound_effects = enable_sound_effects and SOUND_EFFECTS_AVAILABLE
+        self.sound_effect_player = None
+        
+        if self.enable_sound_effects:
+            try:
+                self.sound_effect_player = SoundEffectPlayer(
+                    volume=sound_effect_volume,
+                    enable_effects=True
+                )
+                print(f"効果音システム初期化完了")
+            except Exception as e:
+                print(f"⚠️ 効果音システム初期化失敗: {e}")
+                self.enable_sound_effects = False
+                self.sound_effect_player = None
         
         # Windows Speech API初期化
         if self.use_windows_speech:
@@ -532,24 +559,6 @@ class AudioOutputHandler:
         
         return success
 
-
-def test_audio_output():
-    """音声出力のテスト関数"""
-    print("=== 音声出力テスト ===")
-    
-    # 音声出力ハンドラー初期化
-    audio_output = AudioOutputHandler()
-    
-    # 利用可能音声の表示
-    audio_output.get_available_voices()
-    
-    # 基本テスト
-    audio_output.test_speech()
-    
-    # インタラクティブテスト
-    print("\n--- インタラクティブテスト ---")
-    print("読み上げるテキストを入力してください（'quit'で終了）:")
-    
     def get_stats(self) -> Dict[str, Any]:
         """
         音声出力の統計情報を取得
@@ -578,6 +587,61 @@ def test_audio_output():
         
         return stats
     
+    def play_wake_word_detected_sound(self) -> bool:
+        """
+        ウェイクワード検知効果音を再生
+        
+        Returns:
+            再生成功フラグ
+        """
+        if self.enable_sound_effects and self.sound_effect_player:
+            return self.sound_effect_player.play_wake_word_detected()
+        return False
+    
+    def play_command_accepted_sound(self) -> bool:
+        """
+        コマンド受付効果音を再生
+        
+        Returns:
+            再生成功フラグ
+        """
+        if self.enable_sound_effects and self.sound_effect_player:
+            return self.sound_effect_player.play_command_accepted()
+        return False
+    
+    def play_error_sound(self) -> bool:
+        """
+        エラー効果音を再生
+        
+        Returns:
+            再生成功フラグ
+        """
+        if self.enable_sound_effects and self.sound_effect_player:
+            return self.sound_effect_player.play_error()
+        return False
+    
+    def play_success_sound(self) -> bool:
+        """
+        成功効果音を再生
+        
+        Returns:
+            再生成功フラグ
+        """
+        if self.enable_sound_effects and self.sound_effect_player:
+            return self.sound_effect_player.play_success()
+        return False
+    
+    def set_sound_effects_enabled(self, enabled: bool):
+        """効果音の有効/無効を切り替え"""
+        self.enable_sound_effects = enabled
+        if self.sound_effect_player:
+            self.sound_effect_player.set_enabled(enabled)
+    
+    def set_sound_effect_volume(self, volume: float):
+        """効果音の音量を設定"""
+        if self.sound_effect_player:
+            self.sound_effect_player.set_volume(volume)
+    
     def cleanup(self):
         """リソースの清理"""
         try:
@@ -585,6 +649,8 @@ def test_audio_output():
                 self.engine.stop()
             if self.audio_cache:
                 self.audio_cache.clear_cache()
+            if self.sound_effect_player:
+                self.sound_effect_player.cleanup()
             print("🔒 音声出力システム終了")
         except Exception as e:
             self.logger.error(f"音声出力クリーンアップエラー: {e}")

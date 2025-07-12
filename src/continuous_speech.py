@@ -31,16 +31,18 @@ except ImportError:
 class ContinuousSpeechMonitor:
     """常時音声監視クラス"""
     
-    def __init__(self, language: str = "ja-JP", wake_words: list = None):
+    def __init__(self, language: str = "ja-JP", wake_words: list = None, audio_handler=None):
         """
         初期化
         
         Args:
             language: 認識言語
             wake_words: ウェイクワードリスト
+            audio_handler: 音声出力ハンドラー（効果音再生用）
         """
         self.language = language
         self.wake_words = wake_words or ["ルクス", "るくす", "Lux", "lux"]
+        self.audio_handler = audio_handler  # 音声出力ハンドラー
         
         # 音声設定
         self.sample_rate = 16000
@@ -293,6 +295,17 @@ class ContinuousSpeechMonitor:
                 
                 if is_wake_word:
                     print(f"🚨 ウェイクワード検知: '{text}'")
+                    
+                    # 効果音再生
+                    if self.audio_handler:
+                        success = self.audio_handler.play_wake_word_detected_sound()
+                        if success:
+                            print("🔊 ウェイクワード検知音を再生")
+                        else:
+                            print("⚠️ ウェイクワード検知音の再生に失敗")
+                    else:
+                        print("⚠️ audio_handlerが設定されていません")
+                    
                     if self.wake_word_callback:
                         self.wake_word_callback(text, extracted_command)
                 else:
