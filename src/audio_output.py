@@ -347,7 +347,7 @@ class AudioOutputHandler:
     
     def _synthesize_and_play(self, clean_text: str, blocking: bool = True) -> bool:
         """
-        音声合成して再生（従来の方法）
+        音声合成して再生（最適化版）
         
         Args:
             clean_text: クリーンアップされたテキスト
@@ -356,13 +356,19 @@ class AudioOutputHandler:
         Returns:
             再生成功したかどうか
         """
-        # Windows Speech APIを優先使用
+        # Windows Speech APIを優先使用（最も高速）
         if self.use_windows_speech and self.win_speech:
-            print("DEBUG: Windows Speech API使用")
+            print("DEBUG: Windows Speech API使用（最適化版）")
             try:
+                # 音声速度を設定（可能な場合）
+                try:
+                    self.win_speech.Rate = min(10, max(-10, (self.rate - 200) // 20))  # -10〜10の範囲で調整
+                except:
+                    pass  # 設定に失敗しても続行
+                
                 if blocking:
                     print("DEBUG: Windows Speech API同期再生開始")
-                    self.win_speech.Speak(clean_text)
+                    self.win_speech.Speak(clean_text, 0)  # 同期フラグ
                     print("DEBUG: Windows Speech API同期再生完了")
                 else:
                     print("DEBUG: Windows Speech API非同期再生開始")
@@ -373,33 +379,33 @@ class AudioOutputHandler:
                 print(f"⚠️ Windows Speech APIエラー: {e}")
                 # フォールバックでpyttsx3を使用
         
-        # pyttsx3エンジンを使用
+        # pyttsx3エンジンを使用（フォールバック）
         if not self.engine:
             print("❌ 音声エンジンが利用できません")
             return False
         
-        if blocking:
-            # 同期実行（読み上げ完了まで待機）
-            print("DEBUG: pyttsx3同期音声再生開始")
-            
-            # エンジンをリセットして音量を確実に設定
-            self.engine.stop()
-            self.engine.setProperty('volume', 1.0)
-            
-            # テキストを設定して実行
-            self.engine.say(clean_text)
-            self.engine.runAndWait()
-            print("DEBUG: pyttsx3同期音声再生完了")
-        else:
-            # 非同期実行（バックグラウンドで読み上げ）
-            print("DEBUG: pyttsx3非同期音声再生開始")
-            def speak_async():
+        # 高速化のため非同期処理を優先
+        print("DEBUG: pyttsx3エンジン使用")
+        
+        def speak_async():
+            try:
                 self.engine.stop()
+                # 高速設定
+                self.engine.setProperty('rate', min(400, max(150, self.rate)))  # 150-400の範囲で制限
                 self.engine.setProperty('volume', 1.0)
                 self.engine.say(clean_text)
                 self.engine.runAndWait()
-                print("DEBUG: pyttsx3非同期音声再生完了")
-            
+                print("DEBUG: pyttsx3音声再生完了")
+            except Exception as e:
+                print(f"DEBUG: pyttsx3音声再生エラー: {e}")
+        
+        if blocking:
+            # 同期実行
+            print("DEBUG: pyttsx3同期音声再生開始")
+            speak_async()
+        else:
+            # 非同期実行
+            print("DEBUG: pyttsx3非同期音声再生開始")
             thread = threading.Thread(target=speak_async)
             thread.daemon = True
             thread.start()
@@ -428,6 +434,7 @@ class AudioOutputHandler:
             # 除外するパターン（より包括的に）
             skip_patterns = [
                 r'^MCP STDERR',
+                r'MCP STDERR.*?:',
                 r'^\[DEBUG\]',
                 r'^\[I \d{4}-\d{2}-\d{2}',
                 r'^Flushing log events',
@@ -437,12 +444,16 @@ class AudioOutputHandler:
                 r'httpx\]',
                 r'mcp\.server\.lowlevel\.server\]',
                 r'Home Assistant\):',
+                r'httpcore\]',
+                r'Server\):',
+                r'Processing request of type',
+                r'Received RPC response',
                 r'^\s*$'  # 空行
             ]
             
             should_skip = False
             for pattern in skip_patterns:
-                if re.search(pattern, line):
+                if re.search(pattern, line, re.IGNORECASE):
                     should_skip = True
                     break
             
@@ -452,16 +463,22 @@ class AudioOutputHandler:
         clean_text = ' '.join(clean_lines)
         
         # さらにノイズ除去（単語レベル）
-        clean_text = re.sub(r'MCP STDERR.*?:', '', clean_text)
+        clean_text = re.sub(r'MCP STDERR.*?:', '', clean_text, flags=re.IGNORECASE)
         clean_text = re.sub(r'\[I \d{4}-\d{2}-\d{2}.*?\]', '', clean_text)
         clean_text = re.sub(r'HTTP Request:.*?"', '', clean_text)
+        clean_text = re.sub(r'httpx.*?:', '', clean_text, flags=re.IGNORECASE)
+        clean_text = re.sub(r'Home Assistant.*?:', '', clean_text, flags=re.IGNORECASE)
         
         # 複数のスペースを1つにまとめる
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
         
-        # 長すぎる場合は最初の部分のみ使用
-        if len(clean_text) > 500:
-            clean_text = clean_text[:500] + "..."
+        # 空の場合のフォールバック
+        if not clean_text:
+            clean_text = "処理が完了しました"
+        
+        # 長すぎる場合は最初の部分のみ使用（短縮）
+        if len(clean_text) > 200:
+            clean_text = clean_text[:200] + "..."
         
         return clean_text
     

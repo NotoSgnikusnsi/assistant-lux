@@ -95,9 +95,8 @@ class VoiceAssistant:
             model=gemini_config.get("model", "gemini-2.5-flash")
         )
         
-        # 音声出力（キャッシュ機能を一時的に無効化）
-        # cache_phrases = optimization_config.get("cache_phrases", []) if optimization_config.get("pregenerated_cache", False) else None
-        cache_phrases = None  # キャッシュ機能を一時的に無効化
+        # 音声出力（キャッシュ機能を有効化）
+        cache_phrases = optimization_config.get("cache_phrases", []) if optimization_config.get("pregenerated_cache", False) else None
         self.audio_output = AudioOutputHandler(
             rate=audio_output_config.get("rate", 180),
             volume=audio_output_config.get("volume", 0.8),
@@ -387,10 +386,10 @@ class VoiceAssistant:
                     # 音声出力前の追加チェック
                     if self.audio_output and self.audio_output.engine:
                         print("DEBUG: 音声エンジン確認OK")
-                        audio_success = self.audio_output.speak_text(response, blocking=True)
+                        audio_success = self.audio_output.speak_text(response, blocking=False)  # 非同期に変更
                         print(f"DEBUG: 音声出力結果: {audio_success}")
                         if audio_success:
-                            print("✅ 音声再生完了")
+                            print("✅ 音声再生開始")
                             self.performance_monitor.finish_step("audio_output", True)
                         else:
                             print("❌ 音声再生失敗")
@@ -405,7 +404,8 @@ class VoiceAssistant:
                     self.performance_monitor.finish_step("audio_output", False, str(e))
                     raise
                 finally:
-                    # 音声出力完了後は音声検知を再開
+                    # 音声出力完了後は音声検知を再開（短い待機時間）
+                    time.sleep(0.2)  # 200msに短縮
                     self.continuous_monitor.set_audio_output_active(False)
                 
                 # セッション成功完了
