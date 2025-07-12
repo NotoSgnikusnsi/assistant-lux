@@ -65,6 +65,8 @@ class ConfigManager:
             },
             "gemini": {
                 "timeout": 30,
+                "optimized_timeout": 15,
+                "enable_optimization": True,
                 "debug": False,
                 "retry_count": 2
             },

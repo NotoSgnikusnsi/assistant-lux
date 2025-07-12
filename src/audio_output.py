@@ -448,7 +448,11 @@ class AudioOutputHandler:
                 r'Server\):',
                 r'Processing request of type',
                 r'Received RPC response',
-                r'^\s*$'  # 空行
+                r'^\s*$',  # 空行
+                r'GET http://homeassistant',  # Home Assistant関連
+                r'POST http://homeassistant',  # Home Assistant関連
+                r'\[I \d{4}-\d{2}-\d{2}.*?\]',  # タイムスタンプログ
+                r'01[A-Z0-9]{20,}'  # セッションID等の長い英数字文字列
             ]
             
             should_skip = False
@@ -468,6 +472,9 @@ class AudioOutputHandler:
         clean_text = re.sub(r'HTTP Request:.*?"', '', clean_text)
         clean_text = re.sub(r'httpx.*?:', '', clean_text, flags=re.IGNORECASE)
         clean_text = re.sub(r'Home Assistant.*?:', '', clean_text, flags=re.IGNORECASE)
+        clean_text = re.sub(r'GET http://.*?"', '', clean_text)
+        clean_text = re.sub(r'POST http://.*?"', '', clean_text)
+        clean_text = re.sub(r'01[A-Z0-9]{20,}', '', clean_text)  # セッションID等を除去
         
         # 複数のスペースを1つにまとめる
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()

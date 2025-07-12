@@ -92,6 +92,8 @@ class VoiceAssistant:
         self.gemini_client = GeminiClient(
             debug=gemini_config.get("debug", False),
             timeout=gemini_config.get("timeout", 30),
+            optimized_timeout=gemini_config.get("optimized_timeout", 15),
+            enable_optimization=gemini_config.get("enable_optimization", True),
             model=gemini_config.get("model", "gemini-2.5-flash")
         )
         
@@ -456,16 +458,22 @@ class VoiceAssistant:
         print("\n🎤 音声アシスタントが開始されました")
         print("Ctrl+C で終了できます")
         
-        # 起動音声案内
-        startup_msg = self.system_messages.get("startup_message", "音声アシスタント ルクス が起動しました。ルクス と呼びかけてください。")
-        self.audio_output.speak_text(startup_msg, blocking=True)
-        
         try:
-            # 常時音声監視開始
+            # 常時音声監視開始（起動案内前に開始）
             self.continuous_monitor.start_monitoring()
             print("📡 常時ウェイクワード監視開始")
             print(f"ウェイクワード: {', '.join(self.wake_words)}")
             print("いつでもウェイクワードを話しかけてください...")
+            
+            # 音声出力状態を通知（起動案内中は音声検知を抑制）
+            self.continuous_monitor.set_audio_output_active(True)
+            
+            # 起動音声案内（音声検知開始後に実行）
+            startup_msg = self.system_messages.get("startup_message", "音声アシスタント ルクス が起動しました。ルクス と呼びかけてください。")
+            self.audio_output.speak_text(startup_msg, blocking=True)
+            
+            # 音声出力完了後、音声検知を再開
+            self.continuous_monitor.set_audio_output_active(False)
             
             # メインループ - 常時監視状態を維持
             while self.is_running:

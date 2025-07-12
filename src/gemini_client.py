@@ -15,6 +15,8 @@ class GeminiClient:
     def __init__(self, 
                  debug: bool = False,
                  timeout: int = 30,
+                 optimized_timeout: int = 15,
+                 enable_optimization: bool = True,
                  model: str = "gemini-2.5-flash"):
         """
         初期化
@@ -22,16 +24,21 @@ class GeminiClient:
         Args:
             debug: デバッグモード
             timeout: コマンド実行のタイムアウト（秒）
+            optimized_timeout: 最適化応答のタイムアウト（秒）
+            enable_optimization: 最適化機能を有効にするか
             model: 使用するGeminiモデル
         """
         self.debug = debug
         self.timeout = timeout
+        self.optimized_timeout = optimized_timeout
+        self.enable_optimization = enable_optimization
         self.model = model
         
         # ログ設定
         self.logger = logging.getLogger(__name__)
         
-        print(f"Gemini CLI初期化完了: モデル={self.model}, デバッグ={debug}, タイムアウト={timeout}秒")
+        opt_status = "有効" if enable_optimization else "無効"
+        print(f"Gemini CLI初期化完了: モデル={self.model}, デバッグ={debug}, タイムアウト={timeout}秒, 最適化={opt_status}")
         
         # Gemini CLIの動作確認
         self._check_gemini_cli()
@@ -203,6 +210,10 @@ class GeminiClient:
         Returns:
             Geminiからの応答
         """
+        # 最適化が無効な場合は通常の方法を使用
+        if not self.enable_optimization:
+            return self.send_command(command)
+        
         # 簡単なコマンドかどうかを判定
         simple_commands = [
             '電気', '照明', 'ライト', '温度', '時間', '天気', 
@@ -277,16 +288,14 @@ class GeminiClient:
             
             print(f"📤 Geminiに最適化送信中: '{prompt}'")
             
-            # より短いタイムアウトで実行
-            short_timeout = min(self.timeout, 15)  # 最大15秒
-            
+            # 設定された最適化タイムアウトを使用
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='ignore',
-                timeout=short_timeout,
+                timeout=self.optimized_timeout,
                 shell=False
             )
             
@@ -299,7 +308,7 @@ class GeminiClient:
                 return self.send_prompt(prompt, use_assistant_format=True)
                 
         except subprocess.TimeoutExpired:
-            print(f"⏰ Gemini最適化応答がタイムアウト（{short_timeout}秒）- 通常方法にフォールバック")
+            print(f"⏰ Gemini最適化応答がタイムアウト（{self.optimized_timeout}秒）- 通常方法にフォールバック")
             # タイムアウト時は通常の方法を試す
             return self.send_prompt(prompt, use_assistant_format=True)
         except Exception as e:

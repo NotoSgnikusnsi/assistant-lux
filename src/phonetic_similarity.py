@@ -6,6 +6,8 @@
 import re
 import unicodedata
 import time
+import json
+import os
 from typing import Tuple, List, Dict, Optional
 import numpy as np
 
@@ -13,7 +15,15 @@ import numpy as np
 class PhoneticSimilarityCalculator:
     """音韻的類似度計算クラス"""
     
-    def __init__(self):
+    def __init__(self, config_path: str = None):
+        # 設定ファイルの読み込み
+        self.config = self._load_config(config_path)
+        
+        # パフォーマンス設定
+        self.early_exit_threshold = self.config.get('early_exit_threshold', 0.8)
+        self.short_text_threshold = self.config.get('short_text_threshold', 6)
+        self.enable_multi_algorithm = self.config.get('enable_multi_algorithm', True)
+        
         # 日本語音韻グループ定義
         self.phonetic_groups = {
             # 子音グループ
@@ -52,6 +62,36 @@ class PhoneticSimilarityCalculator:
             'りくす': 0.80,
         }
     
+    def _load_config(self, config_path: str = None) -> Dict:
+        """設定ファイルの読み込み"""
+        if config_path is None:
+            # デフォルトの設定ファイルパスを探索
+            possible_paths = [
+                'config.json',
+                '../config.json',
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.json')
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    config_path = path
+                    break
+        
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    return config.get('audio_optimization', {}).get('phonetic_verification', {})
+            except Exception as e:
+                print(f"設定ファイル読み込みエラー: {e}")
+        
+        # デフォルト設定
+        return {
+            'early_exit_threshold': 0.8,
+            'short_text_threshold': 6,
+            'max_processing_time_ms': 10.0,
+            'enable_multi_algorithm': True
+        }
+    
     def calculate_phonetic_similarity(self, text1: str, text2: str) -> float:
         """
         音韻的類似度の計算
@@ -71,13 +111,30 @@ class PhoneticSimilarityCalculator:
         # ひらがな正規化
         text1_norm = self.normalize_text(text1)
         text2_norm = self.normalize_text(text2)
-        
-        # 完全一致チェック
+         # 完全一致チェック
         if text1_norm == text2_norm:
             return 1.0
         
-        # 複数のアルゴリズムで類似度計算
+        # 短文の場合は単一アルゴリズムで高速処理
+        text1_len = len(text1_norm)
+        text2_len = len(text2_norm)
+        max_len = max(text1_len, text2_len)
+        
+        if max_len <= self.short_text_threshold:  # 設定値を使用
+            # 編集距離のみを使用して高速処理
+            return self.phonetic_edit_distance(text1_norm, text2_norm)
+        
+        # マルチアルゴリズムが無効の場合は編集距離のみ使用
+        if not self.enable_multi_algorithm:
+            return self.phonetic_edit_distance(text1_norm, text2_norm)
+        
+        # 長文の場合は複数のアルゴリズムで詳細分析
         edit_distance_score = self.phonetic_edit_distance(text1_norm, text2_norm)
+        
+        # 編集距離が十分高い場合は早期終了（設定値を使用）
+        if edit_distance_score > self.early_exit_threshold:
+            return edit_distance_score
+        
         substring_score = self.optimized_substring_match(text1_norm, text2_norm)
         pattern_score = self.phonetic_pattern_match(text1_norm, text2_norm)
         
@@ -293,8 +350,8 @@ class PhoneticSimilarityCalculator:
                     weighted_score = sub_similarity * length_weight
                     max_score = max(max_score, weighted_score)
                     
-                    # 早期終了条件
-                    if sub_similarity > 0.9:
+                    # 早期終了条件（設定値を使用）
+                    if sub_similarity > self.early_exit_threshold:
                         return weighted_score
         
         return max_score
@@ -323,8 +380,8 @@ class PhoneticSimilarityCalculator:
             similarity = self.phonetic_edit_distance(text1, pattern)
             max_similarity = max(max_similarity, similarity)
             
-            # 早期終了
-            if similarity > 0.9:
+            # 早期終了（設定値を使用）
+            if similarity > self.early_exit_threshold:
                 return similarity
         
         return max_similarity
@@ -362,8 +419,8 @@ class PhoneticSimilarityCalculator:
                     max_similarity = similarity
                     best_match = word
                     
-                # 高い類似度が見つかった場合は早期終了
-                if similarity > 0.95:
+                # 高い類似度が見つかった場合は早期終了（設定値を使用）
+                if similarity > self.early_exit_threshold:
                     return similarity, word
         
         # スライディングウィンドウでの部分文字列チェック
@@ -379,8 +436,8 @@ class PhoneticSimilarityCalculator:
                         max_similarity = similarity
                         best_match = substring
                         
-                    # 高い類似度が見つかった場合は早期終了
-                    if similarity > 0.9:
+                    # 高い類似度が見つかった場合は早期終了（設定値を使用）
+                    if similarity > self.early_exit_threshold:
                         return similarity, substring
         
         return max_similarity, best_match
@@ -389,9 +446,12 @@ class PhoneticSimilarityCalculator:
 class EnhancedWakeWordVerifier:
     """強化されたウェイクワード検証"""
     
-    def __init__(self, target_wake_word: str = "ルクス"):
+    def __init__(self, target_wake_word: str = "ルクス", config_path: str = None):
         self.target_wake_word = target_wake_word
-        self.phonetic_calculator = PhoneticSimilarityCalculator()
+        self.phonetic_calculator = PhoneticSimilarityCalculator(config_path)
+        
+        # 設定ファイルから設定を読み込み
+        config = self.phonetic_calculator.config
         
         # 動的閾値設定
         self.base_threshold = 0.7
@@ -406,8 +466,8 @@ class EnhancedWakeWordVerifier:
             'processing_times': []
         }
         
-        # パフォーマンス監視
-        self.max_processing_time = 15.0  # ms
+        # パフォーマンス監視（設定ファイルから取得）
+        self.max_processing_time = config.get('max_processing_time_ms', 10.0)  # ms
     
     def verify_wake_word(self, recognized_text: str, 
                         context: Dict = None) -> Tuple[bool, float, Dict]:
@@ -429,8 +489,17 @@ class EnhancedWakeWordVerifier:
             return False, 0.0, {'error': 'empty_input'}
         
         try:
+            # 処理時間制限チェック関数
+            def check_time_limit():
+                elapsed = (time.perf_counter() - start_time) * 1000
+                return elapsed < self.max_processing_time
+            
             # 長文の場合は部分抽出を実行
             if len(recognized_text) > len(self.target_wake_word) * 2:
+                # 長文処理前に時間制限チェック
+                if not check_time_limit():
+                    return False, 0.0, {'error': 'timeout_before_processing'}
+                    
                 similarity_score, extracted_part = self.phonetic_calculator.extract_wake_word_from_long_text(
                     recognized_text, self.target_wake_word)
                 
@@ -441,6 +510,10 @@ class EnhancedWakeWordVerifier:
                 similarity_score = self.phonetic_calculator.calculate_phonetic_similarity(
                     recognized_text, self.target_wake_word)
                 extracted_info = ""
+            
+            # 処理完了後の時間制限チェック
+            if not check_time_limit():
+                return False, 0.0, {'error': 'timeout_during_processing'}
             
             # コンテキストベースの閾値調整
             adjusted_threshold = self.get_adjusted_threshold(context)
